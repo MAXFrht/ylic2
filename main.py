@@ -1,26 +1,21 @@
-import os
 from flask import Flask, request
 import logging
 import json
+# импортируем функции из нашего второго файла geo
+from geo import get_country, get_distance, get_coordinates
 
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
-# Хранилище данных о сессиях.
-sessionStorage = {}
-
-#животные
-animals = [
-    'слон',
-    'кролик'
-]
+# Добавляем логирование в файл. 
+# Чтобы найти файл, перейдите на pythonwhere в раздел files, 
+# он лежит в корневой папке
+logging.basicConfig(level=logging.INFO, filename='app.log',
+                    format='%(asctime)s %(levelname)s %(name)s %(message)s')
 
 
 @app.route('/post', methods=['POST'])
-# Функция получает тело запроса и возвращает ответ.
 def main():
     logging.info('Request: %r', request.json)
-
     response = {
         'session': request.json['session'],
         'version': request.json['version'],
@@ -28,92 +23,41 @@ def main():
             'end_session': False
         }
     }
-
-    handle_dialog(request.json, response)
-
-    logging.info('Response: %r', request.json)
-
+    handle_dialog(response, request.json)
+    logging.info('Request: %r', response)
     return json.dumps(response)
 
 
-def handle_dialog(req, res):
+def handle_dialog(res, req):
     user_id = req['session']['user_id']
-
     if req['session']['new']:
-        # Это новый пользователь.
-        # Инициализируем сессию и поприветствуем его.
-
-        sessionStorage[user_id] = {
-            'suggests': [
-                "Не хочу.",
-                "Не буду.",
-                "Отстань!",
-            ],
-            'animal': 0
-        }
-
-        res['response']['text'] = 'Привет! Купи ' + animals[sessionStorage[user_id]['animal']] + 'a!'
-        res['response']['buttons'] = get_suggests(user_id, animals[sessionStorage[user_id]['animal']])
+        res['response']['text'] = \
+            'Привет! Я могу показать город или сказать расстояние между городами!'
         return
-
-    # Обрабатываем ответ пользователя.
-    if req['request']['original_utterance'].lower() in [
-        'ладно',
-        'куплю',
-        'покупаю',
-        'хорошо'
-    ]:
-        # Пользователь согласился, прощаемся.
-
-        sessionStorage[user_id]['suggests'] = [
-            "Не хочу.",
-            "Не буду.",
-            "Отстань!",
-        ]
-        if sessionStorage[user_id]['animal'] == len(animals) - 1:
-            res['response']['text'] = animals[sessionStorage[user_id]['animal']] + 'а можно найти на Яндекс.Маркете!'
-            sessionStorage[user_id]['animal'] += 1
-            res['response']['end_session'] = True
-        else:
-            res['response']['text'] = animals[sessionStorage[user_id]['animal']] + 'а можно найти на Яндекс.Маркете!'
-            sessionStorage[user_id]['animal'] += 1
-            res['response']['text'] += ' А ' + animals[sessionStorage[user_id]['animal']] + 'a купишь? '
-            res['response']['buttons'] = get_suggests(user_id, animals[sessionStorage[user_id]['animal']])
-        return
-
-    # Если нет, то убеждаем его купить слона!
-    res['response']['text'] = ('Все говорят "%s", а ты купи ' + animals[sessionStorage[user_id]['animal']] + 'а!') % (
-        req['request']['original_utterance']
-    )
-    res['response']['buttons'] = get_suggests(user_id, animals[sessionStorage[user_id]['animal']])
+    # Получаем города из нашего
+    cities = get_cities(req)
+    if not cities:
+        res['response']['text'] = 'Ты не написал название не одного города!'
+    elif len(cities) == 1:
+        res['response']['text'] = 'Этот город в стране - ' + \
+                                  get_country(cities[0])
+    elif len(cities) == 2:
+        distance = get_distance(get_coordinates(
+            cities[0]), get_coordinates(cities[1]))
+        res['response']['text'] = 'Расстояние между этими городами: ' + \
+                                  str(round(distance)) + ' км.'
+    else:
+        res['response']['text'] = 'Слишком много городов!'
 
 
-# Функция возвращает две подсказки для ответа.
-def get_suggests(user_id, animal):
-    session = sessionStorage[user_id]
-
-    # Выбираем две первые подсказки из массива.
-    suggests = [
-        {'title': suggest, 'hide': True}
-        for suggest in session['suggests'][:2]
-    ]
-
-    # Убираем первую подсказку, чтобы подсказки менялись каждый раз.
-    session['suggests'] = session['suggests'][1:]
-    sessionStorage[user_id] = session
-
-    # Если осталась только одна подсказка, предлагаем подсказку
-    # со ссылкой на Яндекс.Маркет.
-    if len(suggests) < 2:
-        suggests.append({
-            "title": "Ладно",
-            "url": "https://market.yandex.ru/search?text=" + animal,
-            "hide": True
-        })
-
-    return suggests
+def get_cities(req):
+    cities = []
+    for entity in req['request']['nlu']['entities']:
+        if entity['type'] == 'YANDEX.GEO':
+            if 'city' in entity['value']:
+                cities.append(entity['value']['city'])
+    return cities
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run()
